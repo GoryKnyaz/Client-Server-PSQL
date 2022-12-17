@@ -3,347 +3,429 @@ import PySimpleGUI as pyGUI
 import socket
 
 
-def set_command_to_array(Commands, Command, Index_command):
-    if Index_command == len(Commands):
-        Commands.append(Command)
-    else:
-        Commands[Index_command] = Command
+class MySocket(socket.socket):
+    def __init__(self):
+        super().__init__()
+        super().settimeout(5)
 
+    def __del__(self):
+        super().close()
 
-def set_connection_mass(Ip, Login, Password):
-    with open("last_connect.txt", 'w') as file:
-        file.write(Ip + ' ' + Login + ' ' + Password)
-
-
-def get_connection_mass():
-    lineMass = []
-    try:
-        with open("last_connect.txt", 'r') as file:
-            for line in file:
-                lineMass += [line.split(' ')]
-    finally:
-        return lineMass
-
-
-def send_text(Sock, text):
-    try:
+    def send_text(self, text):
         size_str = "0" * (8 - len(str(len(text)))) + str(len(text))
-        Sock.send(size_str.encode('utf-8'))
-        Sock.send(text.encode('utf-8'))
-    except socket.error:
-        pass
+        super().send(size_str.encode('utf-8'))
+        super().send(text.encode('utf-8'))
 
-
-def get_text(Sock):
-    try:
-        size = int(Sock.recv(8).decode('utf-8'))
+    def get_text(self):
+        size = int(super().recv(8).decode('utf-8'))
         answer = ""
         while len(answer) != size:
-            answer += Sock.recv(size - len(answer)).decode('utf-8')
+            answer += super().recv(size - len(answer)).decode('utf-8')
         return answer
-    except socket.error:
-        return None
+
+    def my_connect(self, IP):
+        try:
+            super().connect((IP, 9090))
+            return True
+        except socket.error:
+            return False
+
+    def my_authorization(self, Login_Password):
+        try:
+            self.send_text(Login_Password)
+            answer = self.get_text().split('>')
+        except socket.error:
+            return False, False
+        return True, answer[0] == "0"
+
+    def my_communication(self, Command):
+        self.send_text(Command)
+        Output = self.get_text().split('>')
+        return Output
 
 
-def get_public_tables(Window, Sock, Commands, Index_command, Headings):
-    return communication(Window, Sock, "select table_name from information_schema.tables where table_schema='public';",
-                         Commands, Index_command, Headings)
+class MyConnectionApp(pyGUI.Window):
+    def __init__(self, Font):
+        Layout = \
+            [
+                [pyGUI.Text('Status: none', key='status')],
+                [pyGUI.Text('IP', key='ip'),
+                 pyGUI.InputText(pad=((63, 0), (0, 0)), disabled_readonly_background_color='#2c2825',
+                                 use_readonly_for_disable=True, key='ip_text')],
+                [pyGUI.Text('User', key='user', visible=False),
+                 pyGUI.InputText(pad=((45, 0), (0, 0)), use_readonly_for_disable=True, key='user_text',
+                                 disabled_readonly_background_color='#2c2825', visible=False)],
+                [pyGUI.Text('Password', key='password', visible=False),
+                 pyGUI.InputText(pad=((8, 0), (0, 0)), use_readonly_for_disable=True, key='password_text',
+                                 disabled_readonly_background_color='#2c2825', password_char='*', visible=False)],
+                [pyGUI.OK(key="OK", button_text="Connect"),
+                 pyGUI.Exit(pad=((10, 0), (0, 0)), button_color="Red")]
+            ]
+        self.is_connect = False
+        self.is_confirm = False
+        self.my_socket = MySocket()
+        self.auto_filling = []
+        super().__init__('Connect to Server PSQL', Layout, font=Font, finalize=True)
 
+    def __del__(self):
+        super().close()
 
-def delete_spaces(string):
-    while string.find('  ') != -1:
-        string = string.replace('  ', ' ')
-    return string
+    @staticmethod
+    def __get_connection_mass():
+        lineMass = []
+        try:
+            with open("last_connect.txt", 'r') as file:
+                for line in file:
+                    lineMass += [line.split(' ')]
+        finally:
+            return lineMass
 
+    @staticmethod
+    def __set_connection_mass(Ip, Login_Password):
+        with open("last_connect.txt", 'w') as file:
+            file.write('%s %s %s' % (Ip, Login_Password[0], Login_Password[1]))
 
-def quotes(stringMass):
-    new_stringMass = []
-    was_quotes = False
-    new_string = ""
-    for string in stringMass:
-        quotes_index = string.find('$$')
-        if quotes_index != -1:
-            if was_quotes:
-                new_stringMass.append(new_string + string)
-                new_string = ""
-            else:
-                new_string += string + '; '
-            was_quotes = not was_quotes
+    def auto_fill(self):
+        self.auto_filling = self.__get_connection_mass()
+        if len(self.auto_filling) > 0:
+            self['ip_text'].Update(value=self.auto_filling[-1][0])
+            self['user_text'].Update(value=self.auto_filling[-1][1])
+            self['password_text'].Update(value=self.auto_filling[-1][2])
+
+    def reset_con(self):
+        self['status'].Update(value='Status: none')
+        self['password_text'].Update(visible=False, value='', disabled=False)
+        self['user_text'].Update(visible=False, value='', disabled=False)
+        self['ip_text'].Update(value='', disabled=False)
+        self['password'].Update(visible=False)
+        self['user'].Update(visible=False)
+        self['OK'].Update(text='Connect')
+        if self.is_connect:
+            self.my_socket.close()
+            self.my_socket = MySocket()
+            self.is_connect = False
+            self.is_confirm = False
+
+    def connection(self, IP):
+        self.is_connect = self.my_socket.my_connect(IP)
+        if self.is_connect:
+            self.my_socket.my_connect(IP)
+            self['ip_text'].Update(disabled=True)
+            self['user'].Update(visible=True)
+            self['user_text'].Update(visible=True)
+            self['password'].Update(visible=True)
+            self['password_text'].Update(visible=True)
+            self['status'].Update(value="Status: successful")
+            self['OK'].Update(text='Confirm')
         else:
-            if was_quotes:
-                new_string += string + '; '
+            self['status'].Update(value="Status: denied")
+
+    def authorization(self, IP, Login_Password):
+        self.is_connect, self.is_confirm = self.my_socket.my_authorization(Login_Password)
+        if self.is_connect:
+            if self.is_confirm:
+                self.__set_connection_mass(IP, Login_Password.split('\n'))
+                return True
             else:
-                new_stringMass.append(string)
-    new_stringMass.append(new_string)
-    return new_stringMass
-
-
-def execute_commands_from_file(File, Sock):
-    outputMass = []
-    try:
-        with open(File, 'r') as commandFile:
-            lineFileMass = [str(line).replace('\t', '').replace('\n', '') for line in commandFile]
-        commandsMass = quotes([delete_spaces(command) for command in
-                               ("".join(line + (' ' if line.find(';') == -1 else '') for line in lineFileMass)).split(
-                                   ';')])
-        for command in commandsMass:
-            if command != '':
-                send_text(Sock, command)
-                outputMass.append(get_text(Sock))
-            else:
-                commandsMass.remove('')
-        outputFile = File.split('.')[:1]
-        with open("".join(s + ('.' if s is not outputFile[-1] else '') for s in outputFile) + '_output.txt',
-                  'w') as outputFile:
-            for command, output in zip(commandsMass, outputMass):
-                outputFile.write(command + ';\n' + output.split('>')[-1] + '\n\n')
-
-        return True
-    finally:
+                self['status'].Update(value="Status: denied")
+        else:
+            self.reset_con()
+            self['status'].Update(value="Status: disconnect")
         return False
 
 
-def reset_con(Window, Sock, Is_connected):
-    Window['status'].Update(value='Status: none')
-    Window['password_text'].Update(visible=False, value='', disabled=False)
-    Window['user_text'].Update(visible=False, value='', disabled=False)
-    Window['ip_text'].Update(value='', disabled=False)
-    Window['password'].Update(visible=False)
-    Window['user'].Update(visible=False)
-    Window['OK'].Update(text='Connect')
-    if Is_connected:
-        Sock.close()
-        Sock = socket.socket()
-        Sock.settimeout(5)
-    return Sock, False, False
-
-
-def auto_fill(Window):
-    connection_mass = get_connection_mass()
-    if len(connection_mass) > 0:
-        Window['ip_text'].Update(value=connection_mass[-1][0])
-        Window['user_text'].Update(value=connection_mass[-1][1])
-        Window['password_text'].Update(value=connection_mass[-1][2])
-    return Window
-
-
-def connection(Window, Values, Sock):
-    try:
-        Sock.connect((Values['ip_text'], 9090))
-        Window['ip_text'].Update(disabled=True)
-        Window['user'].Update(visible=True)
-        Window['user_text'].Update(visible=True)
-        Window['password'].Update(visible=True)
-        Window['password_text'].Update(visible=True)
-        Window['status'].Update(value="Status: successful")
-        Window['OK'].Update(text='Confirm')
-        return True
-    except socket.error:
-        Window['status'].Update(value="Status: denied")
-        return False
-
-
-def authorization(Window, Sock, login_password):
-    try:
-        send_text(Sock, login_password)
-        answer = get_text(Sock).split('>')
-        if answer[0] == "0":
-            return True, True
-    except socket.error:
-        Window['status'].Update(value="Status: denied")
-        return False, False
-    Window['status'].Update(value="Status: denied")
-    return True, False
-
-
-def set_table_text(Window, Output_data, headings):
-    min_width_table = 660
-    col_widths = [min([max(map(len, columns)) + 2]) * 8 for columns in
-                  zip(*Output_data)]
-    Window['table'].Update(values=Output_data[1:])
-    for cid in headings:
-        Window['table'].widget.heading(cid, text='')
-        Window['table'].widget.column(cid, width=0)
-    new_width_table, min_width_column = sum(col_widths), min_width_table // len(col_widths)
-    for cid, text, width in zip(headings, Output_data[0], col_widths):
-        Window['table'].widget.heading(cid, text=text)
-        Window['table'].widget.column(cid, width=(width if new_width_table >= min_width_table else min_width_column))
-
-
-def up_arrow(Window, Command, Commands, Index_command):
-    if Command != '':
-        set_command_to_array(Commands, Command, Index_command)
-    if Index_command != 0:
-        Index_command -= 1
-        Window['command_text'].Update(value=Commands[Index_command])
-    return Index_command
-
-
-def down_arrow(Window, Command, Commands, Index_command):
-    if Index_command < len(Commands) - 1:
-        Commands[Index_command] = Command
-        Index_command += 1
-        Window['command_text'].Update(value=Commands[Index_command])
-    else:
-        Index_command = len(Commands)
-        Window['command_text'].Update(value='')
-    return Index_command
-
-
-def communication(Window, Sock, Command, Commands, Index_command, Headings):
-    try:
-        if Command != "" and (Command != Commands[-1] if len(Commands) != 0 else True):
-            if Index_command == len(Commands):
-                Commands.append(Command)
-            else:
-                Commands[Index_command] = Command
-            Index_command = len(Commands)
-        Window['command_text'].Update(value='')
-        send_text(Sock, Command)
-        Output = get_text(Sock).split('>')
-        print(Output[1], '=>', Command)
-        if Output[-1] == "\nno results to fetch\n":
-            print(Command.split(' ')[0] + ' ' + Command.split(' ')[1])
-        elif Output[0] != '0' or Output[-1].split(' ')[0] == 'Connect':
-            print(Output[-1])
-        else:
-            set_table_text(Window, [out.split('\t') for out in Output[-1].split('\n')], Headings)
-        return Index_command, True
-    except socket.error as Error:
-        print(Error)
-        return Index_command, False
-
-
-def keyboard_event(Window, Values, Sock, Commands, Index_command, This_command, Headings, Is_Connected):
-    if This_command == '':
-        if keyboard.is_pressed('up'):
-            return up_arrow(Window, Values['command_text'], Commands, Index_command), Is_Connected, This_command
-        elif keyboard.is_pressed('down'):
-            return down_arrow(Window, Values['command_text'], Commands, Index_command), Is_Connected, This_command
-        elif keyboard.is_pressed('esc'):
-            Index_command, Is_Connected = get_public_tables(Window, Sock, Commands, Index_command, Headings)
-            return Index_command, Is_Connected, This_command
-    else:
-        if keyboard.is_pressed('esc'):
-            return communication(Window, Sock, This_command, Commands, Index_command, Headings), ""
-    return Index_command, Is_Connected, This_command
-
-
-def application(Sock, Font):
-    is_connected, is_closed, index_command, head_count, this_command, commands, prev_click = True, False, 0, 10, '', \
-                                                                                             [], (-1, -1)
-    headings = [f'h{i}' for i in range(head_count)]
-    layout = \
-        [
-
-            [pyGUI.Table(values=[["      "] * head_count], headings=headings, vertical_scroll_only=False,
+class MyTable(pyGUI.Table):
+    def __init__(self):
+        self.index_line = 0
+        self.starting_row = 0
+        self.prev_click = (-1, -1)
+        self.this_table = ''
+        self.row_count = 0
+        self.head_count = 10
+        self.max_rows = 20
+        self.min_width_table = 660
+        self.headings = [f'h{i}' for i in range(self.head_count)]
+        super().__init__(values=[["      "] * self.head_count], headings=self.headings, vertical_scroll_only=False,
                          num_rows=20, def_col_width=100, display_row_numbers=True, justification='center',
-                         key='table', enable_click_events=True)],
-            [pyGUI.Output(size=(78, 10), key='output')],
-            [pyGUI.Text('Command', key='command'),
-             pyGUI.InputText(size=(70, 10), key='command_text', enable_events=True)],
-            [pyGUI.OK(button_text="Enter", key="OK"),
-             pyGUI.Button(button_text="Reset"),
-             pyGUI.Exit(pad=((10, 0), (0, 0)), button_color="Red"),
-             pyGUI.Button(button_text="Execute Commands From File", pad=((325, 0), (0, 0)), key='EXEC')]
-        ]
-    window = pyGUI.Window('Client PSQL', layout, font=Font, finalize=True)
-    index_command, is_connected = get_public_tables(window, Sock, commands, index_command, headings)
+                         key='table', enable_click_events=True)
+
+    def insert(self, Window, Datas):
+        col_widths = [min([max(map(len, columns)) + 2]) * 8 for columns in
+                      zip(*Datas)]
+        Window['table'].StartingRowNumber = self.starting_row
+        Window['table'].Update(values=Datas[1:])
+        for cid in self.headings:
+            Window['table'].widget.heading(cid, text='')
+            Window['table'].widget.column(cid, width=0)
+        new_width_table, min_width_column = sum(col_widths), self.min_width_table // len(col_widths)
+        for cid, text, width in zip(self.headings, Datas[0], col_widths):
+            Window['table'].widget.heading(cid, text=text)
+            Window['table'].widget.column(cid, width=(
+                width if new_width_table >= self.min_width_table else min_width_column))
+        Window['prevLines'].Update(disabled=True)
+        Window['nextLines'].Update(disabled=True)
+
+    def click_to_table(self, Window, Row_Column):
+        row, column = Row_Column
+        if row is not None and self.prev_click == Row_Column:
+            Window.my_socket.send_text("select count(*) from " + Window['table'].Values[row][column] + ';')
+            Code, Database, Result = Window.my_socket.get_text().split('>')
+            if Code != '0':
+                return
+            self.starting_row = 0
+            self.this_table = Window['table'].Values[row][column]
+            self.prev_click = (-1, -1)
+            self.index_line = 0
+            self.row_count = int(Result.split('\n')[-1])
+            Window.communication("select * from " + self.this_table + f' limit {self.max_rows};')
+            Window['prevLines'].Update(disabled=True)
+            Window['nextLines'].Update(disabled=self.row_count <= self.max_rows)
+        else:
+            self.prev_click = Row_Column
+
+    def prev_datas(self, Window):
+        self.index_line -= 1
+        self.starting_row = self.index_line * self.max_rows
+        Window.communication(
+            "select * from " + self.this_table + f' offset {self.index_line * self.max_rows} limit {self.max_rows};')
+        Window['prevLines'].Update(disabled=self.index_line == 0)
+        Window['nextLines'].Update(disabled=False)
+
+    def next_datas(self, Window):
+        self.index_line += 1
+        self.starting_row = self.index_line * self.max_rows
+        Window.communication(
+            "select * from " + self.this_table +
+            f' offset {self.index_line * 20} limit '
+            f'{min(self.max_rows, self.row_count - self.index_line * self.max_rows)};',
+        )
+        Window['prevLines'].Update(disabled=False)
+        Window['nextLines'].Update(disabled=self.row_count - (self.index_line + 1) * self.max_rows <= 0)
+
+
+class MyCommandString(pyGUI.InputText):
+    def __init__(self):
+        self.this_command = ""
+        self.index_command = 0
+        self.commands = []
+        super().__init__(size=(77, 10), key='command_text', enable_events=True)
+
+    def up_arrow(self, Window, Command):
+        if Command != '':
+            if self.index_command == len(self.commands):
+                self.commands.append(Command)
+            else:
+                self.commands[self.index_command] = Command
+        if self.index_command != 0:
+            self.index_command -= 1
+            Window['command_text'].Update(value=self.commands[self.index_command])
+
+    def down_arrow(self, Window, Command):
+        if self.index_command < len(self.commands) - 1:
+            self.commands[self.index_command] = Command
+            self.index_command += 1
+            Window['command_text'].Update(value=self.commands[self.index_command])
+        else:
+            self.index_command = len(self.commands)
+            Window['command_text'].Update(value='')
+
+    def insert(self, Command):
+        if Command != "" and (Command != self.commands[-1] if len(self.commands) != 0 else True):
+            if self.index_command == len(self.commands):
+                self.commands.append(Command)
+            else:
+                self.commands[self.index_command] = Command
+            self.index_command = len(self.commands)
+
+    def analise(self, Window, Command):
+        if Command.find(';') == -1:
+            self.this_command += Command + (' ' if Command[-1] != ' ' else '')
+            print('->', Command)
+            Window['command_text'].Update(value='')
+        else:
+            text_command = Command.split(';')
+            print(f'-> {Command}' if len(text_command) != 2 or text_command[1] != '' else '')
+            for command in text_command:
+                if self.this_command == '' and command == '':
+                    continue
+                self.this_command += command + ';'
+                Window.communication(self.this_command)
+                self.this_command = ""
+
+    def key_pressed(self, Window, Command):
+        if self.this_command == '':
+            if keyboard.is_pressed('up'):
+                self.up_arrow(Window, Command)
+            elif keyboard.is_pressed('down'):
+                self.down_arrow(Window, Command)
+            elif keyboard.is_pressed('esc'):
+                Window.get_public_tables()
+                Window.my_table.prev_click = (-1, -1)
+        else:
+            if keyboard.is_pressed('esc'):
+                print('--command is cleaning--')
+                Window['command_text'].Update(value='')
+                self.this_command = ""
+
+
+class MyApp(pyGUI.Window):
+    def __init__(self, Sock, Font):
+        self.my_socket = Sock
+        self.my_table = MyTable()
+        self.my_command_string = MyCommandString()
+        Layout = \
+            [
+                [self.my_table,
+                 pyGUI.Button(button_text="↑", key='prevLines', disabled=True),
+                 pyGUI.Button(button_text="↓", key='nextLines', disabled=True)],
+                [pyGUI.Output(size=(85, 10), key='output')],
+                [pyGUI.Text('Command', key='command'), self.my_command_string],
+                [pyGUI.OK(button_text="Enter", key="OK"),
+                 pyGUI.Button(button_text="Reset"),
+                 pyGUI.Exit(pad=((10, 0), (0, 0)), button_color="Red"),
+                 pyGUI.Button(button_text="Execute Commands From File", pad=((388, 0), (0, 0)), key='EXEC')]
+            ]
+        super().__init__('Client PSQL', Layout, font=Font, finalize=True)
+
+    def __del__(self):
+        super().close()
+
+    @staticmethod
+    def delete_spaces(string):
+        while string.find('  ') != -1:
+            string = string.replace('  ', ' ')
+        return string
+
+    @staticmethod
+    def quotes(stringMass):
+        new_stringMass = []
+        was_quotes = False
+        new_string = ""
+        for string in stringMass:
+            quotes_index = string.find('$$')
+            if quotes_index != -1:
+                if was_quotes:
+                    new_stringMass.append(new_string + string)
+                    new_string = ""
+                else:
+                    new_string += string + '; '
+                was_quotes = not was_quotes
+            else:
+                if was_quotes:
+                    new_string += string + '; '
+                else:
+                    new_stringMass.append(string)
+        new_stringMass.append(new_string)
+        return new_stringMass
+
+    def communication(self, Command):
+        try:
+            self.my_command_string.insert(Command)
+            self['command_text'].Update(value='')
+            Code, DataBase, Result = self.my_socket.my_communication(Command)
+            print(DataBase, '=>', Command)
+            if Result == "\nno results to fetch\n":
+                print(Command.split(' ')[0] + ' ' + Command.split(' ')[1])
+            elif Code != '0' or Result.split(' ')[0] == 'Connect':
+                print(Result)
+            else:
+                self.my_table.insert(self, [out.split('\t') for out in Result.split('\n')])
+            return True
+        except socket.error as Error:
+            print(Error)
+            return False
+
+    def get_public_tables(self):
+        self.my_table.starting_row = 0
+        return self.communication("select table_name from information_schema.tables where table_schema='public';")
+
+    def execute_commands_from_file(self, File):
+        outputMass = []
+        try:
+            with open(File, 'r') as commandFile:
+                lineFileMass = [str(line).replace('\t', '').replace('\n', '') for line in commandFile]
+            commandsMass = self.quotes([self.delete_spaces(command) for command in
+                                        ("".join(
+                                            line + (' ' if line.find(';') == -1 else '') for line in
+                                            lineFileMass)).split(';')])
+            for command in commandsMass:
+                if command != '':
+                    self.my_socket.send_text(command)
+                    outputMass.append(self.my_socket.get_text())
+                else:
+                    commandsMass.remove('')
+            outputFile = File.split('.')[:1]
+            with open("".join(s + ('.' if s is not outputFile[-1] else '') for s in outputFile) + '_output.txt',
+                      'w') as outputFile:
+                for command, output in zip(commandsMass, outputMass):
+                    outputFile.write(command + ';\n' + output.split('>')[-1] + '\n\n')
+
+            return True
+        finally:
+            return False
+
+
+def my_application(Sock, Font):
+    is_closed, row_count, index_line = False, 0, 0
+    window = MyApp(Sock, Font)
+    window.get_public_tables()
     while not is_closed:
         event, values = window.read()
         match event:
             case pyGUI.WIN_CLOSED | 'Exit':
-                send_text(Sock, "EXIT")
-                Sock.close()
-                is_connected, is_closed = False, True
-                pass
+                window.my_socket.send_text(Sock, "EXIT")
+                return True
             case "Reset":
-                is_closed = True
-                pass
+                return False
             case "OK":
                 if values['command_text'] == '':
                     continue
                 elif values['command_text'].upper() in ["EXIT", "EXIT;", "QUIT", "QUIT;"]:
-                    is_closed = True
+                    return False
                 elif values['command_text'].upper() in ["CLEAR", "CLEAR;"]:
                     window['output'].Update(value='')
                 else:
-                    if values['command_text'].find(';') == -1:
-                        this_command += values['command_text'] + (' ' if values['command_text'][-1] != ' ' else '')
-                        print('->', values['command_text'])
-                        window['command_text'].Update(value='')
-                    else:
-                        text_command = values['command_text'].split(';')
-                        print('->', values['command_text'])
-                        for command in text_command:
-                            if this_command == '' and command == '':
-                                continue
-                            this_command += command + ';'
-                            index_command, is_connected = communication(window, Sock, this_command, commands,
-                                                                        index_command, headings)
-                            this_command = ""
+                    window.my_command_string.analise(window, values['command_text'])
                 pass
             case "EXEC":
-                execute_commands_from_file(pyGUI.popup_get_file('', no_window=True), Sock)
+                window.execute_commands_from_file(pyGUI.popup_get_file('', no_window=True))
                 pass
             case ("table", "+CLICKED+", (row, col)):
-                if prev_click == event[-1]:
-                    index_command, is_connected = communication(window, Sock,
-                                                                "select * from " + window['table'].Values[row][col]
-                                                                + ';', commands, index_command, headings)
-                prev_click = event[-1]
+                window.my_table.click_to_table(window, (row, col))
                 pass
-        index_command, is_connected, this_command = keyboard_event(window, values, Sock, commands, index_command,
-                                                                   this_command, headings, is_connected)
-    window.close()
-    return not is_connected
+            case "prevLines":
+                window.my_table.prev_datas(window)
+                pass
+            case "nextLines":
+                window.my_table.next_datas(window)
+                pass
+        window.my_command_string.key_pressed(window, values['command_text'])
+    return not window.my_socket.is_connected
 
 
-def connect_application():
-    is_connected, is_confirmed, is_closed = False, False, False
+def my_connect_application():
     pyGUI.theme("DarkAmber")
     font = ("Arial", 13)
-    layout = \
-        [
-            [pyGUI.Text('Status: none', key='status')],
-            [pyGUI.Text('IP', key='ip'),
-             pyGUI.InputText(pad=((63, 0), (0, 0)), disabled_readonly_background_color='#2c2825',
-                             use_readonly_for_disable=True, key='ip_text')],
-            [pyGUI.Text('User', key='user', visible=False),
-             pyGUI.InputText(pad=((45, 0), (0, 0)), use_readonly_for_disable=True, key='user_text',
-                             disabled_readonly_background_color='#2c2825', visible=False)],
-            [pyGUI.Text('Password', key='password', visible=False),
-             pyGUI.InputText(pad=((8, 0), (0, 0)), use_readonly_for_disable=True, key='password_text',
-                             disabled_readonly_background_color='#2c2825', password_char='*', visible=False)],
-            [pyGUI.OK(key="OK", button_text="Connect"),
-             pyGUI.Exit(pad=((10, 0), (0, 0)), button_color="Red")]
-        ]
-    window = pyGUI.Window('Connect to Server PSQL', layout, font=font, finalize=True)
-    window = auto_fill(window)
-    sock = socket.socket()
-    sock.settimeout(5)
+    is_closed = False
+    window = MyConnectionApp(font)
+    window.auto_fill()
     while not is_closed:
         event, values = window.read()
         match event:
             case pyGUI.WIN_CLOSED | 'Exit':
                 is_closed = True
             case "OK":
-                if not is_connected:
-                    is_connected = connection(window, values, sock)
+                if not window.is_connect:
+                    window.connection(values['ip_text'])
                 else:
-                    is_connected, is_confirmed = authorization(window, sock,
-                                                               values['user_text'] + '\n' + values['password_text'])
-        if is_confirmed:
+                    window.authorization(values['ip_text'], values['user_text'] + '\n' + values['password_text'])
+        if window.is_confirm:
             window.hide()
-            is_closed = application(sock, font)
-            set_connection_mass(values['ip_text'], values['user_text'], values['password_text'])
+            is_closed = my_application(window.my_socket, font)
             if not is_closed:
                 window.un_hide()
-                sock, is_connected, is_confirmed = reset_con(window, sock, is_connected)
-                auto_fill(window)
-
-    window.close()
-    sock.close()
+                window.reset_con()
+                window.auto_fill()
 
 
-connect_application()
+my_connect_application()
